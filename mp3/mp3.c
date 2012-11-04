@@ -10,36 +10,28 @@
 #include <linux/spinlock.h>
 #include <linux/string.h>
 
+#include <linux/workqueue.h>
+
 #include "mp3.h"
 #include "mp3_given.h"
 
-static struct mp3_task_struct process_list;
-static struct task_struct *dispatcher_thread;
-static struct mp3_task_struct *running_task;
+#define DELAYED_WORK_EXPIRE (HZ/20)
+
+static struct mp3_task_struct pcb_list;
+static struct delayed_work pcb_work;
+
 
 /*
- * _timer_callback: interrupt function called when the timer expires
- * restarts the timer and wakes up the worker function
- */
-void _timer_callback(unsigned long pid)
+*
+*
+*/
+static void pcb_wq_function(struct work_struct *work)
 {
-	struct list_head* node;
-	struct mp3_task_struct* task = NULL;
-
-	spin_lock(&lock);
-
-	list_for_each(node, &process_list.list) {
-		task = list_entry(node, struct mp3_task_struct, list);
-		if (task->pid == pid) { 
-			//printk(KERN_INFO "Timer tick for pid %d",task->pid);
-			//printk(KERN_INFO "pid %d is ready",task->pid);
-	
-			wake_up_process(dispatcher_thread);
-	
-			break;
-		}
-	}
-	spin_unlock(&lock);
+   /*
+   my_work_t *my_work = (my_work_t*)work;
+   printk("my_work.pid %d\n",my_work->pid);
+   kfree((void*)work);
+   */
 }
 
 /*
@@ -50,6 +42,9 @@ void _timer_callback(unsigned long pid)
 void register_process(unsigned int pid)
 { 
    struct mp3_task_struct *task ;
+   bool schedule_work;
+   
+   schedule_work = false;
    
    printk(KERN_INFO "REGISTER process with pid: %d",pid);
    
@@ -57,25 +52,27 @@ void register_process(unsigned int pid)
    
    //initialize the task
    task->linux_task = find_task_by_pid(pid);
-   
    task->pid = pid; 
  
-   //setup the timer
+   //add the task to the list of pcb
+   //schedule work if necessary
    
-   /*
-   setup_timer(&task->wakeup_timer, _timer_callback, (unsigned long)task->pid); 
-   task->last_wakeup_time = get_jiffies_64();
+   spin_lock(&list_lock);
    
-   if(mod_timer(&task->wakeup_timer, task->last_wakeup_time + msecs_to_jiffies(task->period)))
+   if (list_empty(&pcb_list.list))
    {
-      return;
+      schedule_work = true;
    }
-   */
    
-   //add the task to the list of processes
-   spin_lock(&lock);
-   list_add(&(task->list),&(process_list.list));
-   spin_unlock(&lock);
+   list_add(&(task->list),&(pcb_list.list));
+   
+   if (schedule_work)
+   {
+      INIT_DELAYED_WORK(&pcb_work,&pcb_wq_function);
+      schedule_delayed_work(&pcb_work,DELAYED_WORK_EXPIRE);
+   }
+   
+   spin_unlock(&list_lock);
 }
 
 
@@ -91,8 +88,8 @@ struct mp3_task_struct* task_by_pid(int pid)
    
    tmp = NULL;
    
-   spin_lock(&lock);
-   list_for_each_safe(pos, q, &process_list.list)
+   spin_lock(&list_lock);
+   list_for_each_safe(pos, q, &pcb_list.list)
    {
       
       tmp = list_entry(pos, struct mp3_task_struct, list);
@@ -100,7 +97,7 @@ struct mp3_task_struct* task_by_pid(int pid)
       if (tmp->pid == pid)
          break;
    }
-   spin_unlock(&lock);
+   spin_unlock(&list_lock);
   
    return tmp;
 }
@@ -115,35 +112,36 @@ void deregister_process(unsigned int pid)
    struct list_head *pos, *q;
    
    // look up the process
-   spin_lock(&lock);
-   list_for_each_safe(pos, q, &process_list.list)
+   spin_lock(&list_lock);
+   list_for_each_safe(pos, q, &pcb_list.list)
    {
       
       tmp = list_entry(pos, struct mp3_task_struct, list);
       
       if (tmp->pid == pid)
       {
-         if (running_task!= NULL && running_task->pid == tmp->pid)
-         {
-            running_task = NULL;
-         }
-         
          list_del(pos);
          kfree(tmp);
          
          printk(KERN_INFO "DEREGISTER task with pid %d", pid);
+         
+         if (list_empty(&(pcb_list.list)))
+         {
+            cancel_delayed_work_sync(&pcb_work);
+         }
               
          break;
       }  
    }
-   spin_unlock(&lock);
+   spin_unlock(&list_lock);
 }
 
+
+
 /**
- * status_write: called when the /proc/mp2/status file is written to
+ * status_write: called when the /proc/mp3/status file is written to
  * gathers the buffer from the user space, converts the char array into an integer,
- * only if the integer is a valid process id, gets the cpu time for the process and
- * stores it in the linked list
+ * only if the integer is a valid process id and stores it in the linked list
  */
 int status_write(struct file *file, const char *buf, unsigned long count, void *data)
 {
@@ -154,11 +152,8 @@ int status_write(struct file *file, const char *buf, unsigned long count, void *
    char *token;
    
    unsigned int pid;
-   int period, computation;
    
    pid = 0;
-   period = 0;
-   computation = 0;
    
    if(count > MAX_CHAR)
    {
@@ -217,6 +212,8 @@ int status_write(struct file *file, const char *buf, unsigned long count, void *
 
    return count;
 }
+
+
 /*
  * status_read:  called when file /proc/mp1/status is read
  * loops through list of pids and corresponding cpu times, copying them to the buffer returned to the user
@@ -229,8 +226,8 @@ int status_read(char *buf, char ** start, off_t offset, int count, int *eof, voi
    char *tmp_seq = process_seq, *cur_buf = buf;
    unsigned int len = 0, total_len = 0;
 
-   spin_lock(&lock);
-   list_for_each(pos, &process_list.list)
+   spin_lock(&list_lock);
+   list_for_each(pos, &pcb_list.list)
    {
       tmp = list_entry(pos, struct mp3_task_struct, list);
       sprintf(process_seq, "%d\n", tmp->pid);
@@ -245,83 +242,9 @@ int status_read(char *buf, char ** start, off_t offset, int count, int *eof, voi
       tmp_seq = process_seq;
       len = 0;
    }
-   spin_unlock(&lock);
+   spin_unlock(&list_lock);
    
    return total_len;
-}
-
-
-
-/*
-*
-* Dispatcher thread handler
-* Finds the task with the highest priority
-* and performs a context switch
-*/
-int dispatcher_thread_handler(void *data)
-{
-/*
-   //find next task to run
-   struct mp3_task_struct *tmp,*new_task;
-   struct list_head *pos;
-   struct sched_param sparam_old,sparam_new;
-   
-   new_task = NULL;
-   
-   set_current_state(TASK_INTERRUPTIBLE);
-   while(!kthread_should_stop())
-   {
-	  //find the task with the highest priority (lowest period)
-      spin_lock(&lock);
-      list_for_each(pos, &process_list.list)
-      {
-         tmp = list_entry(pos, struct mp3_task_struct, list);
-         
-         if ((tmp->process_state == PROCESS_READY) &&
-             ((new_task == NULL) || 
-             (tmp->period < new_task->period))
-            )
-         {
-            new_task = tmp;
-         }
-      }
-      spin_unlock(&lock);
-      
-      if (new_task != running_task)
-      {
-		 //if we had a running task with a lower priority, update its scheduling policy
-         if (running_task)
-         {
-            if (running_task->process_state == PROCESS_RUNNING)
-               running_task->process_state = PROCESS_READY;
-         
-            if (running_task->linux_task) {
-               sparam_old.sched_priority=0;
-               sched_setscheduler(running_task->linux_task, SCHED_NORMAL, &sparam_old);
-            }
-         }
-         
-	     // Update new highest process priority
-         if (new_task) {
-            
-            new_task->process_state = PROCESS_RUNNING;
-            
-            wake_up_process(new_task->linux_task);
-            sparam_new.sched_priority=MAX_USER_RT_PRIO-1;
-            sched_setscheduler(new_task->linux_task, SCHED_FIFO, &sparam_new);
-            
-            printk(KERN_INFO "pid %d is preempted by %d",running_task->pid,new_task->pid);
-            
-            running_task = new_task;
-         }
-      } 
-      
-      schedule();
-      set_current_state(TASK_INTERRUPTIBLE);
-   }
-   set_current_state(TASK_RUNNING);
-  */ 
-   return 0;
 }
 
 /*
@@ -331,9 +254,7 @@ int dispatcher_thread_handler(void *data)
  */
 int __init my_module_init(void)
 {
-   
-   char thread_name[7] = "worker";
-   INIT_LIST_HEAD(&process_list.list);
+   INIT_LIST_HEAD(&pcb_list.list);
    
    proc_dir = proc_mkdir(DIR_NAME, NULL);
    status = create_proc_entry(STATUS_NAME, 0666, proc_dir);
@@ -341,16 +262,7 @@ int __init my_module_init(void)
    status->read_proc = status_read;
    status->write_proc = status_write;
    
-   spin_lock_init(&lock);
-   
-   running_task  = NULL;
-
-   dispatcher_thread = kthread_create(&dispatcher_thread_handler, NULL, thread_name);
-   
-   if (dispatcher_thread) 
-   {
-		wake_up_process(dispatcher_thread);
-   }
+   spin_lock_init(&list_lock);
    
    return 0;
 }
@@ -366,8 +278,8 @@ void __exit my_module_exit(void)
    struct mp3_task_struct *tmp;
    struct list_head *pos, *q;
 
-   spin_lock(&lock);
-   list_for_each_safe(pos, q, &process_list.list)
+   spin_lock(&list_lock);
+   list_for_each_safe(pos, q, &pcb_list.list)
    {
       
       tmp = list_entry(pos, struct mp3_task_struct, list);
@@ -377,12 +289,7 @@ void __exit my_module_exit(void)
       list_del(pos);
       kfree(tmp);
    }
-   spin_unlock(&lock);
-   
-   if(kthread_stop(dispatcher_thread))
-   {
-      return;
-   }
+   spin_unlock(&list_lock);
    
    remove_proc_entry(STATUS_NAME, proc_dir);
    remove_proc_entry(DIR_NAME, NULL);

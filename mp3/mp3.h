@@ -1,7 +1,7 @@
 #ifndef _MP2_GROUP1_H
 #define _MP2_GROUP1_H
 
-#define DIR_NAME "mp2"
+#define DIR_NAME "mp3"
 #define STATUS_NAME "status"
 #define MOD_TIMER(timer) mod_timer(&timer, get_jiffies_64() + msecs_to_jiffies(5000))
 #define MAX_CHAR 120
@@ -13,7 +13,7 @@
 static char written_data[MAX_CHAR];
 static struct proc_dir_entry *proc_dir, *status;
 
-static spinlock_t lock; 
+static spinlock_t list_lock; 
 
 /*
 * augmented process control block used by the 
