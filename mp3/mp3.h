@@ -12,8 +12,9 @@
 
 static char written_data[MAX_CHAR];
 static struct proc_dir_entry *proc_dir, *status;
-
 static spinlock_t list_lock; 
+
+
 
 /*
 * augmented process control block used by the 
@@ -27,11 +28,15 @@ struct mp3_task_struct
    
    unsigned int pid;
    
+   long jiffies;
    long process_utilization;
    long major_fault_count;
    long minor_fault_count;
  
 };
 
+static int device_open(struct inode*,struct file *);
+static int device_release(struct inode*,struct file *);
+static int device_mmap(struct file *file,struct vm_area_struct *vm_area);
 
 #endif

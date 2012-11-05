@@ -9,17 +9,30 @@
 #include <asm/uaccess.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
+#include <linux/mm.h>
+#include <linux/cdev.h>
 
 #include <linux/workqueue.h>
-
+#include <linux/fs.h>
 #include "mp3.h"
 #include "mp3_given.h"
 
 #define DELAYED_WORK_EXPIRE (HZ/20)
+#define DEVICE_NAME "node"
 
 static struct mp3_task_struct pcb_list;
 static struct delayed_work pcb_work;
+static void* buffer;
 
+static dev_t my_dev_maj_min;
+static struct cdev my_cdev;
+
+static struct file_operations fops = {
+   .owner = THIS_MODULE,
+   .open = device_open,
+   .release = device_release,
+   .mmap = device_mmap
+};
 
 /*
 *
@@ -29,7 +42,7 @@ static void pcb_wq_function(struct work_struct *work)
 {
    /*
    my_work_t *my_work = (my_work_t*)work;
-   printk("my_work.pid %d\n",my_work->pid);
+   printk(KERN_INFO "my_work.pid %d\n",my_work->pid);
    kfree((void*)work);
    */
 }
@@ -247,6 +260,22 @@ int status_read(char *buf, char ** start, off_t offset, int count, int *eof, voi
    return total_len;
 }
 
+static int device_open(struct inode *inode, struct file *file)
+{
+   return 0;
+}
+
+static int device_release(struct inode *inode, struct file *file)
+{
+   return 0;
+}
+
+static int device_mmap(struct file *file,struct vm_area_struct *vm_area)
+{
+   return 0;
+}
+
+
 /*
  * my_module_init: called when the module is initialized in the kernel
  * initializes the list of pids and /proc/ entries, creates and starts
@@ -254,6 +283,10 @@ int status_read(char *buf, char ** start, off_t offset, int count, int *eof, voi
  */
 int __init my_module_init(void)
 {
+   int rc;
+   int err;
+   dev_t dev;
+   
    INIT_LIST_HEAD(&pcb_list.list);
    
    proc_dir = proc_mkdir(DIR_NAME, NULL);
@@ -264,8 +297,46 @@ int __init my_module_init(void)
    
    spin_lock_init(&list_lock);
    
+   buffer = vmalloc(128*4*(sizeof(unsigned long)));
+   
+   //register our character device
+    
+   rc = alloc_chrdev_region(&dev,0,1,DEVICE_NAME);
+   
+   if (rc)
+      return -1;
+   
+   my_dev_maj_min = MKDEV(MAJOR(dev), 0);
+   
+   cdev_init(&my_cdev,&fops); 
+   err = cdev_add(&my_cdev,my_dev_maj_min,1);
+   
+   if (err){
+      printk(KERN_ERR "unable to register char device\n");
+      
+      goto err_cdev;
+   }
+   
+   /*   
+   //the old way
+   Major = register_chrdev(0,DEVICE_NAME,&fops);
+   
+   if (Major<0) {
+      printk(KERN_INFO "registering char device failed with %d\n",Major);
+      return Major;
+   }
+   
+   printk(KERN_INFO "I was assigned major number %d. To talk to\n",Major);
+   printk(KERN_INFO "the drive, create a dev file with\n");
+   printk(KERN_INFO "'mknod /dev/%s c %d 0'.\n", DEVICE_NAME,Major);
+   */
+   
+err_cdev:
+   unregister_chrdev_region(my_dev_maj_min,1);
+   
    return 0;
 }
+
 
 /*
  * my_module_exit: called upon the removal of the kernel module
@@ -290,6 +361,8 @@ void __exit my_module_exit(void)
       kfree(tmp);
    }
    spin_unlock(&list_lock);
+   
+   unregister_chrdev_region(my_dev_maj_min,1);
    
    remove_proc_entry(STATUS_NAME, proc_dir);
    remove_proc_entry(DIR_NAME, NULL);
