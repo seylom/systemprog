@@ -14,8 +14,6 @@ static char written_data[MAX_CHAR];
 static struct proc_dir_entry *proc_dir, *status;
 static spinlock_t list_lock; 
 
-
-
 /*
 * augmented process control block used by the 
 * scheduler

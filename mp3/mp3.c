@@ -297,7 +297,7 @@ int __init my_module_init(void)
    
    spin_lock_init(&list_lock);
    
-   buffer = vmalloc(128*4*(sizeof(unsigned long)));
+   buffer = vmalloc(128*PAGE_SIZE);
    
    //register our character device
     
@@ -308,7 +308,10 @@ int __init my_module_init(void)
    
    my_dev_maj_min = MKDEV(MAJOR(dev), 0);
    
-   cdev_init(&my_cdev,&fops); 
+   cdev_init(&my_cdev,&fops);
+   my_cdev.dev = my_dev_maj_min;
+   my_cdev.owner = fops.owner;
+   
    err = cdev_add(&my_cdev,my_dev_maj_min,1);
    
    if (err){
@@ -316,6 +319,10 @@ int __init my_module_init(void)
       
       goto err_cdev;
    }
+   
+   printk(KERN_INFO "char device %d registered\n",MAJOR(dev));
+   
+   return 0;
    
    /*   
    //the old way
@@ -332,9 +339,10 @@ int __init my_module_init(void)
    */
    
 err_cdev:
+   cdev_del(&my_cdev);
    unregister_chrdev_region(my_dev_maj_min,1);
    
-   return 0;
+   return err;
 }
 
 
@@ -362,6 +370,8 @@ void __exit my_module_exit(void)
    }
    spin_unlock(&list_lock);
    
+   printk(KERN_INFO "unregistering char device %d ...",MAJOR(my_dev_maj_min));
+   cdev_del(&my_cdev);
    unregister_chrdev_region(my_dev_maj_min,1);
    
    remove_proc_entry(STATUS_NAME, proc_dir);
