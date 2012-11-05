@@ -22,7 +22,8 @@
 
 static struct mp3_task_struct pcb_list;
 static struct delayed_work pcb_work;
-static void* buffer;
+static unsigned char* buffer;
+static unsigned int tick_counter;
 
 static dev_t my_dev_maj_min;
 static struct cdev my_cdev;
@@ -35,16 +36,67 @@ static struct file_operations fops = {
 };
 
 /*
-*
+* Handler for our single workqueue item. it gathers cpu utilization as well as 
+* page fault information and saves it in the buffer variable.
 *
 */
 static void pcb_wq_function(struct work_struct *work)
 {
-   /*
-   my_work_t *my_work = (my_work_t*)work;
-   printk(KERN_INFO "my_work.pid %d\n",my_work->pid);
-   kfree((void*)work);
-   */
+   struct mp3_task_struct *tmp;
+   struct list_head *pos, *q;
+
+   unsigned long jiff,min_pf,maj_pf,cpu_used,
+               tot_min_pf,tot_maj_pf,tot_cpu_used;
+   unsigned int pid;
+   
+   //reset data for accuracy
+   jiff = 0;
+   min_pf = 0;
+   maj_pf = 0;
+   cpu_used = 0;
+   tot_min_pf = 0;
+   tot_maj_pf = 0;
+   tot_cpu_used = 0;
+    
+   tmp = NULL;
+   jiff = jiffies; 
+   
+   spin_lock(&list_lock);
+   list_for_each_safe(pos, q, &pcb_list.list)
+   {
+
+      tmp = list_entry(pos, struct mp3_task_struct, list);
+
+      pid = tmp->linux_task->pid;
+      //get cpu utilization as well as minimum and maximum 
+      //page fault
+      get_cpu_use(pid,&min_pf,&maj_pf,&cpu_used);
+      
+      tot_min_pf +=min_pf;
+      tot_maj_pf +=maj_pf;
+      tot_cpu_used += cpu_used;
+      
+   }
+   spin_unlock(&list_lock);
+   
+   //save data in the buffer
+   
+   memcpy(buffer,&jiff,sizeof(jiff));
+   buffer+= sizeof(jiff);
+   memcpy(buffer,&tot_min_pf,sizeof(tot_min_pf));
+   buffer+= sizeof(tot_min_pf);
+   memcpy(buffer,&tot_maj_pf,sizeof(tot_maj_pf));
+   buffer+= sizeof(tot_maj_pf);
+   memcpy(buffer,&tot_cpu_used,sizeof(tot_cpu_used));
+   buffer+= sizeof(tot_cpu_used);
+   
+   
+   tick_counter++;
+   
+   if (tick_counter < 12000){
+      //re-schedule
+      schedule_delayed_work(&pcb_work,DELAYED_WORK_EXPIRE);
+   }
 }
 
 /*
@@ -280,15 +332,15 @@ static int device_mmap(struct file *file,struct vm_area_struct *vma)
 {
    unsigned long start = vma->vm_start;
    unsigned long size = vma->vm_end - vma->vm_start;
-   unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+   //unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
    unsigned long page, pos;
 
-   pos = offset;
+   pos = 0;
 
    while(size > 0){
-      page = vmalloc_to_pfn((void *)pos);
+      page = vmalloc_to_pfn(buffer+pos);
 
-      if (remap_pfn_range(vma,start,page,PAGE_SIZE,vma->vm_page_prot))
+      if (remap_pfn_range(vma,start,page,PAGE_SIZE,vma->vm_page_prot))  //PAGE_SHARED?
          return -EAGAIN;
 
       start+= PAGE_SIZE;
@@ -327,7 +379,7 @@ int __init my_module_init(void)
 
    spin_lock_init(&list_lock);
 
-   buffer = vmalloc(128*PAGE_SIZE);
+   buffer = (unsigned char*)vmalloc(128*PAGE_SIZE);
 
    //register our character device
 
@@ -386,6 +438,8 @@ void __exit my_module_exit(void)
 
    struct mp3_task_struct *tmp;
    struct list_head *pos, *q;
+   
+   cancel_delayed_work(&pcb_work);
 
    spin_lock(&list_lock);
    list_for_each_safe(pos, q, &pcb_list.list)
@@ -400,7 +454,7 @@ void __exit my_module_exit(void)
    }
    spin_unlock(&list_lock);
    
-   vfree(&buffer);
+   vfree(buffer);
 
    printk(KERN_INFO "unregistering char device %d ...",MAJOR(my_dev_maj_min));
    cdev_del(&my_cdev);
