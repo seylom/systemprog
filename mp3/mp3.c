@@ -399,6 +399,8 @@ void __exit my_module_exit(void)
       kfree(tmp);
    }
    spin_unlock(&list_lock);
+   
+   vfree(&buffer);
 
    printk(KERN_INFO "unregistering char device %d ...",MAJOR(my_dev_maj_min));
    cdev_del(&my_cdev);
