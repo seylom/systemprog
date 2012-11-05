@@ -281,7 +281,7 @@ static int device_mmap(struct file *file,struct vm_area_struct *vma)
    unsigned long start = vma->vm_start;
    unsigned long size = vma->vm_end - vma->vm_start;
    unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
-   unsigned long page, pos;
+   unsigned long page,pos;
 
    pos = offset;
 
