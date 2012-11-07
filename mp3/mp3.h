@@ -15,6 +15,17 @@ static struct proc_dir_entry *proc_dir, *status;
 static spinlock_t list_lock; 
 
 /*
+* data sample to be retrieved at each iteration
+*/
+struct data_sample
+{
+   long jiff; 
+   long major_pf;
+   long minor_pf;
+   long cpu_used;
+};
+
+/*
 * augmented process control block used by the 
 * scheduler
 */
@@ -25,11 +36,6 @@ struct mp3_task_struct
    struct task_struct *linux_task;
    
    unsigned int pid;
-   
-   long jiffies;
-   long process_utilization;
-   long major_fault_count;
-   long minor_fault_count;
  
 };
 
