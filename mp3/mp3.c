@@ -98,6 +98,8 @@ static void work_function(struct work_struct * work) {
 	memory_buffer[buffer_count++] = tmajor;
 	memory_buffer[buffer_count++] = tcpu;
 	
+	//this is a sample edition we will see what you get with it
+
 	//end the buffer by a -1
 	//memory_buffer[buffer_count] = -1;
 	
