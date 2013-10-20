@@ -1,0 +1,4 @@
+System programming in the Linux kernel (UIUC)
+
+- Rate monotonic scheduling in the linux kernel
+- Measuring page fault rate by implementing a device driver in the linux kernel
